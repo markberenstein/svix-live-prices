@@ -13,7 +13,7 @@ app.use((req, res, next) => {
   next();
 });
 
-async function fetchGoldSilver() {
+async function fetchGoldSilverFromXaus() {
   const resp = await fetch("https://xaus.com/api/v1/spot", {
     signal: AbortSignal.timeout(8000),
   });
@@ -25,6 +25,36 @@ async function fetchGoldSilver() {
     source: "xaus.com",
     fetched_at: new Date().toISOString(),
   };
+}
+
+async function fetchGoldSilverFromGoldApi() {
+  const [goldResp, silverResp] = await Promise.all([
+    fetch("https://api.gold-api.com/price/XAU", { signal: AbortSignal.timeout(8000) }),
+    fetch("https://api.gold-api.com/price/XAG", { signal: AbortSignal.timeout(8000) }),
+  ]);
+  if (!goldResp.ok) throw new Error(`gold-api.com (gold) responded ${goldResp.status}`);
+  if (!silverResp.ok) throw new Error(`gold-api.com (silver) responded ${silverResp.status}`);
+  const [goldJson, silverJson] = await Promise.all([goldResp.json(), silverResp.json()]);
+  return {
+    gold_usd_oz: goldJson.price ?? null,
+    silver_usd_oz: silverJson.price ?? null,
+    source: "gold-api.com",
+    fetched_at: new Date().toISOString(),
+  };
+}
+
+async function fetchGoldSilver() {
+  try {
+    return await fetchGoldSilverFromXaus();
+  } catch (primaryErr) {
+    try {
+      const backup = await fetchGoldSilverFromGoldApi();
+      backup.fallbackNote = `xaus.com unavailable (${primaryErr.message}) — used backup source`;
+      return backup;
+    } catch (backupErr) {
+      throw new Error(`xaus.com: ${primaryErr.message}; gold-api.com backup: ${backupErr.message}`);
+    }
+  }
 }
 
 async function fetchOil() {
@@ -76,6 +106,7 @@ async function getPrices() {
     result.gold_usd_oz = gs.gold_usd_oz;
     result.silver_usd_oz = gs.silver_usd_oz;
     result.gold_silver_source = gs.source;
+    if (gs.fallbackNote) result.notes = [...(result.notes || []), gs.fallbackNote];
   } catch (err) {
     result.errors.push(`gold/silver fetch failed: ${err.message}`);
   }
